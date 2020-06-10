@@ -3,8 +3,9 @@ A ArvanCloud helper class to wrap the API relevant for the functionality in this
 """
 import json
 import requests
+import tldextract
 
-ARVANCLOUD_API_ENDPOINT = 'https://napi.arvancloud.com/cdn/4.0/domains/'
+ARVANCLOUD_API_ENDPOINT = 'https://napi.arvancloud.com/cdn/4.0/domains'
 
 
 class _ArvanCloudException(Exception):
@@ -62,12 +63,12 @@ class _ArvanCloudClient:
         :raises requests.exceptions.ConnectionError: If the API request fails
         """
         create_record_response = requests.post(
-            url="{0}/{1}/dns-records".format(ARVANCLOUD_API_ENDPOINT, domain),
+            url="{0}/{1}/dns-records".format(ARVANCLOUD_API_ENDPOINT, self._get_base_domain(domain)),
             headers=self._headers,
             data=json.dumps({
                 "type": record_type,
                 "name": name,
-                "value": value,
+                "value": {"text": value},
                 "ttl": ttl,
                 "cloud": cloud
             })
@@ -102,14 +103,24 @@ class _ArvanCloudClient:
         :raises ._MalformedResponseException: If the API response is not 200
         :raises ._NotAuthorizedException: If ArvanCloud does not accept the authorization credentials
         """
+        just_auth_header = self._headers
+        just_auth_header.pop("Content-Type", None)
         response = requests.delete(
-            url="{0}/{1}/dns-records/{2}".format(ARVANCLOUD_API_ENDPOINT, domain, record_id), # why would you pass domain along with record id I wonder
-            headers=self._headers
+            url="{0}/{1}/dns-records/{2}".format(ARVANCLOUD_API_ENDPOINT, self._get_base_domain(domain), record_id), # why would you pass domain along with record id I wonder
+            headers=just_auth_header
         )
         if response.status_code == 401:
             raise _NotAuthorizedException()
         if response.status_code != 200:
             raise _MalformedResponseException('Status code not 200')
+
+    def _get_base_domain(self, domain):
+        extracted = tldextract.extract(domain)
+        return "{}.{}".format(extracted.domain, extracted.suffix)
+
+    def _get_subdomain(self, domain):
+        extracted = tldextract.extract(domain)
+        return extracted.subdomain
 
     def _get_record_id_by_name(self, domain, record_name):
         """
@@ -122,10 +133,7 @@ class _ArvanCloudClient:
         :rtype: str
         """
         records_response = requests.get(
-            url="{0}/{1}/dns-records".format(ARVANCLOUD_API_ENDPOINT, domain),
-            params={
-                'search': record_name,
-            },
+            url="{0}/{1}/dns-records".format(ARVANCLOUD_API_ENDPOINT, self._get_base_domain(domain)),
             headers=self._headers
         )
         if records_response.status_code == 401:
@@ -133,7 +141,11 @@ class _ArvanCloudClient:
         try:
             records = records_response.json()['data']
             if len(records) > 0:
-                return records[0]['id']
+                subdomain = self._get_subdomain(record_name)
+                for record in records:
+                    if record['name'] == subdomain and record['type'] == 'txt':
+                        return record['id']
+                raise _RecordNotFoundException(record_name)
         except (ValueError, UnicodeDecodeError, KeyError) as exception:
             raise _MalformedResponseException(exception)
         raise _RecordNotFoundException(record_name)
