@@ -10,6 +10,7 @@ install_requires = [
     'requests',
     'mock',
     'requests-mock',
+    'tldextract'
 ]
 
 # read the contents of your README file
